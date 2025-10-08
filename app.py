@@ -388,6 +388,171 @@ if st.session_state.scored_candidates:
 else:
     st.info("Process resumes and enter a job description to see candidate rankings.")
 
+# Candidate Comparison View
+if st.session_state.scored_candidates and len(st.session_state.scored_candidates) >= 2:
+    st.markdown("---")
+    st.header("⚖️ Candidate Comparison")
+    st.markdown("Compare multiple candidates side-by-side to make better hiring decisions")
+    
+    # Select candidates to compare
+    col_comp1, col_comp2, col_comp3 = st.columns(3)
+    
+    with col_comp1:
+        candidate1_idx = st.selectbox(
+            "Candidate 1",
+            range(len(st.session_state.scored_candidates)),
+            format_func=lambda x: f"{st.session_state.scored_candidates[x].get('name', 'N/A')} ({st.session_state.scored_candidates[x]['overall_score']:.1f}%)",
+            key="compare_candidate_1"
+        )
+    
+    with col_comp2:
+        candidate2_idx = st.selectbox(
+            "Candidate 2",
+            range(len(st.session_state.scored_candidates)),
+            format_func=lambda x: f"{st.session_state.scored_candidates[x].get('name', 'N/A')} ({st.session_state.scored_candidates[x]['overall_score']:.1f}%)",
+            index=min(1, len(st.session_state.scored_candidates)-1),
+            key="compare_candidate_2"
+        )
+    
+    with col_comp3:
+        # Optional third candidate
+        compare_three = st.checkbox("Add 3rd candidate", key="compare_three_toggle")
+        if compare_three and len(st.session_state.scored_candidates) >= 3:
+            candidate3_idx = st.selectbox(
+                "Candidate 3",
+                range(len(st.session_state.scored_candidates)),
+                format_func=lambda x: f"{st.session_state.scored_candidates[x].get('name', 'N/A')} ({st.session_state.scored_candidates[x]['overall_score']:.1f}%)",
+                index=min(2, len(st.session_state.scored_candidates)-1),
+                key="compare_candidate_3"
+            )
+        else:
+            candidate3_idx = None
+    
+    # Get selected candidates
+    candidates_to_compare = [
+        st.session_state.scored_candidates[candidate1_idx],
+        st.session_state.scored_candidates[candidate2_idx]
+    ]
+    if candidate3_idx is not None:
+        candidates_to_compare.append(st.session_state.scored_candidates[candidate3_idx])
+    
+    # Display comparison
+    st.markdown("### 📊 Score Comparison")
+    
+    # Create comparison columns
+    comp_cols = st.columns(len(candidates_to_compare))
+    
+    for idx, (col, candidate) in enumerate(zip(comp_cols, candidates_to_compare)):
+        with col:
+            st.markdown(f"#### {candidate.get('name', 'N/A')}")
+            st.metric("Overall Score", f"{candidate['overall_score']:.1f}%")
+            
+            # Score breakdown chart
+            st.markdown("**Score Breakdown:**")
+            score_data = {
+                'Skills': candidate['skills_score'],
+                'Experience': candidate['experience_score'],
+                'Education': candidate['education_score'],
+                'Keywords': candidate['keyword_score'],
+                'Similarity': candidate['similarity_score']
+            }
+            
+            for criterion, score in score_data.items():
+                st.progress(score / 100, text=f"{criterion}: {score:.1f}%")
+    
+    # Detailed comparison table
+    st.markdown("### 📋 Detailed Comparison")
+    
+    comparison_data = {
+        'Criterion': []
+    }
+    
+    # Create unique column names for each candidate
+    for idx, candidate in enumerate(candidates_to_compare):
+        name = candidate.get('name', 'Unknown')
+        # Add index or email to make unique if needed
+        if name in comparison_data:
+            # If name exists, add email or index to make it unique
+            email = candidate.get('email', '')
+            if email and email != 'Not Found':
+                unique_name = f"{name} ({email})"
+            else:
+                unique_name = f"{name} (#{idx+1})"
+        else:
+            unique_name = name
+        comparison_data[unique_name] = []
+    
+    # Add comparison rows
+    criteria = [
+        ('Name', 'name'),
+        ('Email', 'email'),
+        ('Phone', 'phone'),
+        ('Education', 'education'),
+        ('Experience', 'experience_years'),
+        ('Overall Score', 'overall_score'),
+        ('Skills Score', 'skills_score'),
+        ('Experience Score', 'experience_score'),
+        ('Education Score', 'education_score'),
+        ('Top 5 Skills', 'skills')
+    ]
+    
+    for criterion_name, key in criteria:
+        comparison_data['Criterion'].append(criterion_name)
+        
+        for idx, candidate in enumerate(candidates_to_compare):
+            if key == 'skills':
+                value = ', '.join(candidate.get(key, [])[:5])
+            elif key in ['overall_score', 'skills_score', 'experience_score', 'education_score']:
+                value = f"{candidate.get(key, 0):.1f}%"
+            else:
+                value = str(candidate.get(key, 'N/A'))
+            
+            # Get the unique column name for this candidate
+            name = candidate.get('name', 'Unknown')
+            col_name = None
+            for col in comparison_data.keys():
+                if col == 'Criterion':
+                    continue
+                if col.startswith(name):
+                    # Check if this is the right candidate by index
+                    candidate_idx = list(comparison_data.keys()).index(col) - 1
+                    if candidate_idx == idx:
+                        col_name = col
+                        break
+            
+            if col_name:
+                comparison_data[col_name].append(value)
+    
+    df_comparison = pd.DataFrame(comparison_data)
+    st.dataframe(df_comparison, use_container_width=True, hide_index=True)
+    
+    # Strengths and weaknesses comparison
+    st.markdown("### 💡 Analysis Summary")
+    
+    analysis_cols = st.columns(len(candidates_to_compare))
+    
+    for col, candidate in zip(analysis_cols, candidates_to_compare):
+        with col:
+            st.markdown(f"**{candidate.get('name', 'N/A')}**")
+            
+            # Strengths
+            st.markdown("**Strengths:**")
+            if candidate['skills_score'] >= 80:
+                st.success("✓ Excellent skill match")
+            if candidate['experience_score'] >= 80:
+                st.success("✓ Strong experience level")
+            if candidate['education_score'] >= 80:
+                st.success("✓ Good educational fit")
+            
+            # Areas for improvement
+            st.markdown("**Areas to Consider:**")
+            if candidate['skills_score'] < 50:
+                st.warning("⚠ Limited skill overlap")
+            if candidate['experience_score'] < 50:
+                st.warning("⚠ Experience gap")
+            if candidate['education_score'] < 50:
+                st.warning("⚠ Education mismatch")
+
 # Footer
 st.markdown("---")
 st.markdown(
