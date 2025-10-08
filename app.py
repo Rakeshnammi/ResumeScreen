@@ -7,6 +7,7 @@ import base64
 from resume_processor import ResumeProcessor
 from nlp_analyzer import NLPAnalyzer
 from scoring_engine import ScoringEngine
+from email_notifier import EmailNotifier
 
 # Page configuration
 st.set_page_config(
@@ -21,9 +22,10 @@ def init_components():
     nlp_analyzer = NLPAnalyzer()
     scoring_engine = ScoringEngine()
     resume_processor = ResumeProcessor()
-    return nlp_analyzer, scoring_engine, resume_processor
+    email_notifier = EmailNotifier()
+    return nlp_analyzer, scoring_engine, resume_processor, email_notifier
 
-nlp_analyzer, scoring_engine, resume_processor = init_components()
+nlp_analyzer, scoring_engine, resume_processor, email_notifier = init_components()
 
 # Initialize session state
 if 'processed_resumes' not in st.session_state:
@@ -41,6 +43,8 @@ if 'custom_weights' not in st.session_state:
         'text_similarity': 10,
         'semantic_similarity': 5
     }
+if 'email_configured' not in st.session_state:
+    st.session_state.email_configured = False
 
 # Main app
 st.title("🎯 Automated Resume Screening System")
@@ -337,6 +341,51 @@ if st.session_state.scored_candidates:
                     file_name=f"shortlisted_candidates_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv"
                 )
+        
+        # Email Notification Section
+        shortlisted = [c for c in filtered_candidates if c['overall_score'] >= 70]
+        if shortlisted:
+            st.header("📧 Email Notifications")
+            st.markdown(f"Send automated notifications to {len(shortlisted)} shortlisted candidates")
+            
+            with st.expander("Configure Email Settings"):
+                col_email1, col_email2 = st.columns(2)
+                
+                with col_email1:
+                    job_title = st.text_input("Job Title", placeholder="e.g., Senior Software Engineer")
+                    company_name = st.text_input("Company Name", placeholder="e.g., Tech Company Inc.")
+                    smtp_server = st.text_input("SMTP Server", placeholder="e.g., smtp.gmail.com", help="Your email provider's SMTP server")
+                    smtp_port = st.number_input("SMTP Port", value=587, min_value=1, max_value=65535)
+                
+                with col_email2:
+                    sender_email = st.text_input("Sender Email", placeholder="recruiter@company.com")
+                    sender_password = st.text_input("Email Password", type="password", help="Use app-specific password for Gmail")
+                    custom_message = st.text_area("Custom Message (Optional)", placeholder="Additional message for candidates...")
+                
+                if st.button("✉️ Send Notifications to Shortlisted Candidates", type="primary"):
+                    if not all([job_title, company_name, smtp_server, sender_email, sender_password]):
+                        st.error("Please fill in all required email configuration fields")
+                    else:
+                        with st.spinner("Configuring email settings..."):
+                            if email_notifier.configure_smtp(smtp_server, smtp_port, sender_email, sender_password):
+                                st.session_state.email_configured = True
+                                
+                                with st.spinner(f"Sending emails to {len(shortlisted)} candidates..."):
+                                    results = email_notifier.send_batch_notifications(
+                                        shortlisted,
+                                        job_title,
+                                        company_name,
+                                        custom_message
+                                    )
+                                    
+                                    if results['success'] > 0:
+                                        st.success(f"✅ Successfully sent {results['success']} email(s)")
+                                    if results['failed'] > 0:
+                                        st.warning(f"⚠️ Failed to send {results['failed']} email(s)")
+                            else:
+                                st.error("Failed to configure email settings. Please check your SMTP credentials.")
+                
+                st.info("💡 **Tip:** For Gmail, use an [App Password](https://support.google.com/accounts/answer/185833) instead of your regular password")
         
         # Detailed candidate view
         st.header("🔍 Detailed Candidate Analysis")
