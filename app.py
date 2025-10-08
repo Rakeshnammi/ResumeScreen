@@ -32,6 +32,15 @@ if 'job_description' not in st.session_state:
     st.session_state.job_description = ""
 if 'scored_candidates' not in st.session_state:
     st.session_state.scored_candidates = []
+if 'custom_weights' not in st.session_state:
+    st.session_state.custom_weights = {
+        'skills_match': 35,
+        'experience_match': 20,
+        'education_match': 15,
+        'keyword_relevance': 15,
+        'text_similarity': 10,
+        'semantic_similarity': 5
+    }
 
 # Main app
 st.title("🎯 Automated Resume Screening System")
@@ -51,6 +60,78 @@ with st.sidebar:
         st.session_state.job_description = job_description
         # Clear previous scores when job description changes
         st.session_state.scored_candidates = []
+    
+    st.markdown("---")
+    
+    # Scoring weights configuration
+    st.header("⚖️ Scoring Weights")
+    with st.expander("Customize Scoring Criteria", expanded=False):
+        st.markdown("Adjust the importance of each scoring criterion (total must equal 100%):")
+        
+        skills_weight = st.slider("Skills Match", 0, 100, st.session_state.custom_weights['skills_match'], 
+                                   key="skills_weight_slider",
+                                   help="Weight for matching candidate skills with job requirements")
+        experience_weight = st.slider("Experience Match", 0, 100, st.session_state.custom_weights['experience_match'],
+                                       key="experience_weight_slider",
+                                       help="Weight for matching years of experience")
+        education_weight = st.slider("Education Match", 0, 100, st.session_state.custom_weights['education_match'],
+                                      key="education_weight_slider",
+                                      help="Weight for matching education level")
+        keyword_weight = st.slider("Keyword Relevance", 0, 100, st.session_state.custom_weights['keyword_relevance'],
+                                    key="keyword_weight_slider",
+                                    help="Weight for presence of important keywords")
+        text_similarity_weight = st.slider("Text Similarity", 0, 100, st.session_state.custom_weights['text_similarity'],
+                                           key="text_similarity_weight_slider",
+                                           help="Weight for overall text similarity")
+        semantic_weight = st.slider("Semantic Similarity", 0, 100, st.session_state.custom_weights['semantic_similarity'],
+                                     key="semantic_weight_slider",
+                                     help="Weight for advanced semantic matching")
+        
+        total_weight = skills_weight + experience_weight + education_weight + keyword_weight + text_similarity_weight + semantic_weight
+        
+        if total_weight != 100:
+            st.warning(f"⚠️ Total weight is {total_weight}%. Please adjust to equal 100%.")
+        else:
+            st.success("✅ Weights are balanced!")
+            
+            # Update weights if changed
+            new_weights = {
+                'skills_match': skills_weight,
+                'experience_match': experience_weight,
+                'education_match': education_weight,
+                'keyword_relevance': keyword_weight,
+                'text_similarity': text_similarity_weight,
+                'semantic_similarity': semantic_weight
+            }
+            
+            if new_weights != st.session_state.custom_weights:
+                st.session_state.custom_weights = new_weights
+                # Clear scores to trigger re-scoring with new weights
+                st.session_state.scored_candidates = []
+        
+        if st.button("Reset to Default Weights", key="reset_weights_btn"):
+            # Reset the weights in session state
+            default_weights = {
+                'skills_match': 35,
+                'experience_match': 20,
+                'education_match': 15,
+                'keyword_relevance': 15,
+                'text_similarity': 10,
+                'semantic_similarity': 5
+            }
+            st.session_state.custom_weights = default_weights
+            st.session_state.scored_candidates = []
+            
+            # Reset slider states with correct keys
+            st.session_state['skills_weight_slider'] = 35
+            st.session_state['experience_weight_slider'] = 20
+            st.session_state['education_weight_slider'] = 15
+            st.session_state['keyword_weight_slider'] = 15
+            st.session_state['text_similarity_weight_slider'] = 10
+            st.session_state['semantic_weight_slider'] = 5
+            
+            st.success("✅ Weights reset to defaults!")
+            st.rerun()
     
     st.markdown("---")
     
@@ -123,6 +204,9 @@ with col2:
     if st.session_state.processed_resumes and st.session_state.job_description:
         if not st.session_state.scored_candidates or st.button("🎯 Score Resumes", type="primary"):
             with st.spinner("Scoring resumes against job description..."):
+                # Update scoring engine weights
+                scoring_engine.weights = {k: v/100 for k, v in st.session_state.custom_weights.items()}
+                
                 scored_candidates = scoring_engine.score_candidates(
                     st.session_state.processed_resumes,
                     st.session_state.job_description
