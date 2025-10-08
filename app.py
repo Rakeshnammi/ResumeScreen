@@ -1,0 +1,312 @@
+import streamlit as st
+import pandas as pd
+import os
+import tempfile
+from datetime import datetime
+import base64
+from resume_processor import ResumeProcessor
+from nlp_analyzer import NLPAnalyzer
+from scoring_engine import ScoringEngine
+
+# Page configuration
+st.set_page_config(
+    page_title="Resume Screening System",
+    page_icon="📄",
+    layout="wide"
+)
+
+# Initialize components
+@st.cache_resource
+def init_components():
+    nlp_analyzer = NLPAnalyzer()
+    scoring_engine = ScoringEngine()
+    resume_processor = ResumeProcessor()
+    return nlp_analyzer, scoring_engine, resume_processor
+
+nlp_analyzer, scoring_engine, resume_processor = init_components()
+
+# Initialize session state
+if 'processed_resumes' not in st.session_state:
+    st.session_state.processed_resumes = []
+if 'job_description' not in st.session_state:
+    st.session_state.job_description = ""
+if 'scored_candidates' not in st.session_state:
+    st.session_state.scored_candidates = []
+
+# Main app
+st.title("🎯 Automated Resume Screening System")
+st.markdown("Upload resumes and job descriptions to automatically screen and rank candidates using NLP.")
+
+# Sidebar for job description
+with st.sidebar:
+    st.header("📋 Job Description")
+    job_description = st.text_area(
+        "Enter the job description with required skills and qualifications:",
+        value=st.session_state.job_description,
+        height=300,
+        placeholder="Enter job requirements, skills, qualifications, and responsibilities..."
+    )
+    
+    if job_description != st.session_state.job_description:
+        st.session_state.job_description = job_description
+        # Clear previous scores when job description changes
+        st.session_state.scored_candidates = []
+    
+    st.markdown("---")
+    
+    # Processing controls
+    if st.button("🔄 Clear All Data", type="secondary"):
+        st.session_state.processed_resumes = []
+        st.session_state.scored_candidates = []
+        st.session_state.job_description = ""
+        st.rerun()
+
+# Main content area
+col1, col2 = st.columns([1, 2])
+
+with col1:
+    st.header("📁 Upload Resumes")
+    
+    uploaded_files = st.file_uploader(
+        "Choose resume files",
+        type=['pdf', 'docx', 'doc'],
+        accept_multiple_files=True,
+        help="Upload PDF or Word documents containing candidate resumes"
+    )
+    
+    if uploaded_files:
+        if st.button("📤 Process Uploaded Resumes", type="primary"):
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            processed_count = 0
+            total_files = len(uploaded_files)
+            
+            for i, uploaded_file in enumerate(uploaded_files):
+                status_text.text(f"Processing {uploaded_file.name}...")
+                
+                try:
+                    # Create temporary file
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}") as tmp_file:
+                        tmp_file.write(uploaded_file.getvalue())
+                        tmp_file_path = tmp_file.name
+                    
+                    # Process resume
+                    extracted_data = resume_processor.extract_resume_data(tmp_file_path, uploaded_file.name)
+                    
+                    if extracted_data:
+                        # Check if resume already processed (by filename)
+                        existing_resume = next((r for r in st.session_state.processed_resumes if r['filename'] == uploaded_file.name), None)
+                        
+                        if not existing_resume:
+                            st.session_state.processed_resumes.append(extracted_data)
+                            processed_count += 1
+                    
+                    # Clean up temp file
+                    os.unlink(tmp_file_path)
+                    
+                except Exception as e:
+                    st.error(f"Error processing {uploaded_file.name}: {str(e)}")
+                
+                progress_bar.progress((i + 1) / total_files)
+            
+            status_text.text(f"Processed {processed_count} new resumes!")
+            
+            if processed_count > 0:
+                st.success(f"Successfully processed {processed_count} resumes!")
+                # Clear scored candidates to trigger re-scoring
+                st.session_state.scored_candidates = []
+
+with col2:
+    st.header("📊 Resume Analysis")
+    
+    if st.session_state.processed_resumes and st.session_state.job_description:
+        if not st.session_state.scored_candidates or st.button("🎯 Score Resumes", type="primary"):
+            with st.spinner("Scoring resumes against job description..."):
+                scored_candidates = scoring_engine.score_candidates(
+                    st.session_state.processed_resumes,
+                    st.session_state.job_description
+                )
+                st.session_state.scored_candidates = scored_candidates
+        
+        if st.session_state.scored_candidates:
+            st.success(f"Analyzed {len(st.session_state.scored_candidates)} candidates")
+            
+            # Display summary statistics
+            scores = [c['overall_score'] for c in st.session_state.scored_candidates]
+            col_stats1, col_stats2, col_stats3 = st.columns(3)
+            
+            with col_stats1:
+                st.metric("Average Score", f"{sum(scores)/len(scores):.1f}%")
+            with col_stats2:
+                st.metric("Top Score", f"{max(scores):.1f}%")
+            with col_stats3:
+                qualified_candidates = len([s for s in scores if s >= 70])
+                st.metric("Qualified (≥70%)", qualified_candidates)
+    
+    elif not st.session_state.job_description:
+        st.info("Please enter a job description in the sidebar to start scoring resumes.")
+    elif not st.session_state.processed_resumes:
+        st.info("Please upload and process resumes to begin analysis.")
+
+# Results section
+if st.session_state.scored_candidates:
+    st.header("🏆 Candidate Rankings")
+    
+    # Filter and sort options
+    col_filter1, col_filter2, col_filter3 = st.columns(3)
+    
+    with col_filter1:
+        min_score = st.slider("Minimum Score", 0, 100, 0, help="Filter candidates by minimum score")
+    
+    with col_filter2:
+        sort_by = st.selectbox("Sort by", ["Overall Score", "Skills Match", "Experience Match"], index=0)
+    
+    with col_filter3:
+        show_top_n = st.selectbox("Show top", [5, 10, 20, "All"], index=1)
+    
+    # Filter candidates
+    filtered_candidates = [c for c in st.session_state.scored_candidates if c['overall_score'] >= min_score]
+    
+    # Sort candidates
+    sort_key_map = {
+        "Overall Score": "overall_score",
+        "Skills Match": "skills_score",
+        "Experience Match": "experience_score"
+    }
+    filtered_candidates.sort(key=lambda x: x[sort_key_map[sort_by]], reverse=True)
+    
+    # Limit results
+    if show_top_n != "All":
+        filtered_candidates = filtered_candidates[:show_top_n]
+    
+    if filtered_candidates:
+        # Create results DataFrame for display
+        results_data = []
+        for i, candidate in enumerate(filtered_candidates, 1):
+            results_data.append({
+                'Rank': i,
+                'Name': candidate.get('name', 'N/A'),
+                'Email': candidate.get('email', 'N/A'),
+                'Overall Score': f"{candidate['overall_score']:.1f}%",
+                'Skills Score': f"{candidate['skills_score']:.1f}%",
+                'Experience Score': f"{candidate['experience_score']:.1f}%",
+                'Education': candidate.get('education', 'N/A'),
+                'Experience Years': candidate.get('experience_years', 'N/A'),
+                'Top Skills': ', '.join(candidate.get('skills', [])[:5])  # Show top 5 skills
+            })
+        
+        df_results = pd.DataFrame(results_data)
+        st.dataframe(df_results, use_container_width=True, hide_index=True)
+        
+        # Export functionality
+        st.header("📥 Export Results")
+        col_export1, col_export2 = st.columns(2)
+        
+        with col_export1:
+            # CSV Export
+            csv_data = []
+            for candidate in filtered_candidates:
+                csv_data.append({
+                    'Name': candidate.get('name', 'N/A'),
+                    'Email': candidate.get('email', 'N/A'),
+                    'Phone': candidate.get('phone', 'N/A'),
+                    'Overall_Score': round(candidate['overall_score'], 1),
+                    'Skills_Score': round(candidate['skills_score'], 1),
+                    'Experience_Score': round(candidate['experience_score'], 1),
+                    'Education': candidate.get('education', 'N/A'),
+                    'Experience_Years': candidate.get('experience_years', 'N/A'),
+                    'Skills': '; '.join(candidate.get('skills', [])),
+                    'Filename': candidate.get('filename', 'N/A'),
+                    'Analysis_Date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                })
+            
+            df_export = pd.DataFrame(csv_data)
+            csv_string = df_export.to_csv(index=False)
+            
+            st.download_button(
+                label="📊 Download CSV Report",
+                data=csv_string,
+                file_name=f"resume_screening_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                type="primary"
+            )
+        
+        with col_export2:
+            # Shortlisted candidates (score >= 70%)
+            shortlisted = [c for c in filtered_candidates if c['overall_score'] >= 70]
+            if shortlisted:
+                shortlisted_df = pd.DataFrame([{
+                    'Name': c.get('name', 'N/A'),
+                    'Email': c.get('email', 'N/A'),
+                    'Phone': c.get('phone', 'N/A'),
+                    'Overall_Score': round(c['overall_score'], 1),
+                    'Skills': '; '.join(c.get('skills', [])),
+                    'Education': c.get('education', 'N/A')
+                } for c in shortlisted])
+                
+                shortlisted_csv = shortlisted_df.to_csv(index=False)
+                
+                st.download_button(
+                    label="⭐ Download Shortlisted Only",
+                    data=shortlisted_csv,
+                    file_name=f"shortlisted_candidates_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv"
+                )
+        
+        # Detailed candidate view
+        st.header("🔍 Detailed Candidate Analysis")
+        
+        if filtered_candidates:
+            selected_candidate_index = st.selectbox(
+                "Select candidate for detailed view:",
+                range(len(filtered_candidates)),
+                format_func=lambda x: f"{filtered_candidates[x].get('name', 'N/A')} ({filtered_candidates[x]['overall_score']:.1f}%)"
+            )
+            
+            if selected_candidate_index is not None:
+                candidate = filtered_candidates[selected_candidate_index]
+                
+                col_detail1, col_detail2 = st.columns(2)
+                
+                with col_detail1:
+                    st.subheader("📋 Basic Information")
+                    st.write(f"**Name:** {candidate.get('name', 'N/A')}")
+                    st.write(f"**Email:** {candidate.get('email', 'N/A')}")
+                    st.write(f"**Phone:** {candidate.get('phone', 'N/A')}")
+                    st.write(f"**Education:** {candidate.get('education', 'N/A')}")
+                    st.write(f"**Experience:** {candidate.get('experience_years', 'N/A')} years")
+                    
+                    st.subheader("🎯 Scoring Breakdown")
+                    st.write(f"**Overall Score:** {candidate['overall_score']:.1f}%")
+                    st.write(f"**Skills Match:** {candidate['skills_score']:.1f}%")
+                    st.write(f"**Experience Match:** {candidate['experience_score']:.1f}%")
+                
+                with col_detail2:
+                    st.subheader("💼 Skills")
+                    skills = candidate.get('skills', [])
+                    if skills:
+                        for skill in skills[:10]:  # Show top 10 skills
+                            st.write(f"• {skill}")
+                    else:
+                        st.write("No skills extracted")
+                    
+                    st.subheader("📄 Resume Content Preview")
+                    content_preview = candidate.get('raw_text', '')[:500]
+                    if content_preview:
+                        st.text_area("Content Preview", content_preview, height=200, disabled=True)
+                    else:
+                        st.write("No content preview available")
+    
+    else:
+        st.warning(f"No candidates found with score >= {min_score}%")
+
+else:
+    st.info("Process resumes and enter a job description to see candidate rankings.")
+
+# Footer
+st.markdown("---")
+st.markdown(
+    "Built with ❤️ using Streamlit, spaCy, and scikit-learn | "
+    "📧 For support or questions, please contact your system administrator"
+)
