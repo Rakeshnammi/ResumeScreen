@@ -3,6 +3,9 @@ import math
 import re
 from collections import Counter
 from nlp_analyzer import NLPAnalyzer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 
 class ScoringEngine:
     """Scores resumes against job descriptions using various NLP techniques"""
@@ -10,12 +13,14 @@ class ScoringEngine:
     def __init__(self):
         self.nlp_analyzer = NLPAnalyzer()
         self.weights = {
-            'skills_match': 0.4,
-            'experience_match': 0.25,
+            'skills_match': 0.35,
+            'experience_match': 0.20,
             'education_match': 0.15,
             'keyword_relevance': 0.15,
-            'text_similarity': 0.05
+            'text_similarity': 0.10,
+            'semantic_similarity': 0.05
         }
+        self.tfidf_vectorizer = TfidfVectorizer(stop_words='english', max_features=500)
     
     def score_candidates(self, candidates: List[Dict], job_description: str) -> List[Dict]:
         """
@@ -85,13 +90,20 @@ class ScoringEngine:
             job_description
         )
         
+        # Advanced semantic similarity using TF-IDF
+        semantic_score = self._score_semantic_similarity(
+            candidate.get('raw_text', ''),
+            job_description
+        )
+        
         # Calculate weighted overall score
         overall_score = (
             skills_score * self.weights['skills_match'] +
             experience_score * self.weights['experience_match'] +
             education_score * self.weights['education_match'] +
             keyword_score * self.weights['keyword_relevance'] +
-            similarity_score * self.weights['text_similarity']
+            similarity_score * self.weights['text_similarity'] +
+            semantic_score * self.weights['semantic_similarity']
         )
         
         return {
@@ -100,12 +112,13 @@ class ScoringEngine:
             'education_score': round(education_score, 1),
             'keyword_score': round(keyword_score, 1),
             'similarity_score': round(similarity_score, 1),
+            'semantic_score': round(semantic_score, 1),
             'overall_score': round(overall_score, 1)
         }
     
     def _score_skills_match(self, candidate_skills: List[str], required_skills: List[str]) -> float:
         """
-        Score skills matching between candidate and job requirements
+        Score skills matching between candidate and job requirements using enhanced semantic matching
         
         Args:
             candidate_skills: List of candidate skills
@@ -124,6 +137,7 @@ class ScoringEngine:
         # Exact matches
         exact_matches = 0
         partial_matches = 0
+        semantic_matches = 0
         
         for required_skill in required_skills_lower:
             # Check for exact match
@@ -131,20 +145,42 @@ class ScoringEngine:
                 exact_matches += 1
             else:
                 # Check for partial matches (e.g., "javascript" matches "js")
+                found_partial = False
                 for candidate_skill in candidate_skills_lower:
                     if (required_skill in candidate_skill or 
                         candidate_skill in required_skill or
                         self._is_skill_variant(required_skill, candidate_skill)):
                         partial_matches += 1
+                        found_partial = True
                         break
+                
+                # If no partial match, try semantic similarity
+                if not found_partial:
+                    for candidate_skill in candidate_skills_lower:
+                        if self._calculate_skill_similarity(required_skill, candidate_skill) > 0.6:
+                            semantic_matches += 1
+                            break
         
-        # Calculate score
+        # Calculate score with weighted matching
         total_required = len(required_skills_lower)
         exact_weight = 1.0
         partial_weight = 0.7
+        semantic_weight = 0.5
         
-        score = (exact_matches * exact_weight + partial_matches * partial_weight) / total_required
+        score = (exact_matches * exact_weight + 
+                partial_matches * partial_weight + 
+                semantic_matches * semantic_weight) / total_required
         return min(score * 100, 100)  # Cap at 100%
+    
+    def _calculate_skill_similarity(self, skill1: str, skill2: str) -> float:
+        """Calculate semantic similarity between two skills using TF-IDF"""
+        try:
+            vectorizer = TfidfVectorizer(analyzer='char', ngram_range=(2, 3))
+            tfidf_matrix = vectorizer.fit_transform([skill1, skill2])
+            similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+            return float(similarity)
+        except:
+            return 0.0
     
     def _is_skill_variant(self, skill1: str, skill2: str) -> bool:
         """Check if two skills are variants of each other"""
@@ -342,6 +378,33 @@ class ScoringEngine:
         
         return similarity * 100
     
+    def _score_semantic_similarity(self, candidate_text: str, job_description: str) -> float:
+        """
+        Advanced semantic similarity using TF-IDF and cosine similarity
+        
+        Args:
+            candidate_text: Full text of candidate's resume
+            job_description: Job description text
+            
+        Returns:
+            Semantic similarity score (0-100)
+        """
+        if not candidate_text or not job_description:
+            return 0.0
+        
+        try:
+            # Create TF-IDF vectors
+            texts = [candidate_text, job_description]
+            tfidf_matrix = self.tfidf_vectorizer.fit_transform(texts)
+            
+            # Calculate cosine similarity
+            similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+            
+            return float(similarity * 100)
+        except Exception as e:
+            print(f"Error calculating semantic similarity: {e}")
+            return 0.0
+    
     def get_scoring_breakdown(self, candidate: Dict) -> Dict:
         """
         Get detailed scoring breakdown for a candidate
@@ -378,6 +441,11 @@ class ScoringEngine:
                     'score': candidate.get('similarity_score', 0),
                     'weight': self.weights['text_similarity'],
                     'contribution': candidate.get('similarity_score', 0) * self.weights['text_similarity']
+                },
+                'Semantic Similarity': {
+                    'score': candidate.get('semantic_score', 0),
+                    'weight': self.weights['semantic_similarity'],
+                    'contribution': candidate.get('semantic_score', 0) * self.weights['semantic_similarity']
                 }
             },
             'overall_score': candidate.get('overall_score', 0),
